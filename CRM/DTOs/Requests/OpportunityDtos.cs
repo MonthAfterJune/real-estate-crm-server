@@ -56,3 +56,15 @@ public class OpportunityCommissionRateRequest : IValidatableObject
             yield return new ValidationResult("Use at most six decimal places.", [nameof(CommissionRate)]);
     }
 }
+
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public class OpportunityReopenRequest : IValidatableObject
+{
+    [Required]
+    public string Reason { get; set; } = string.Empty;
+    public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
+    {
+        if (Reason is not null && Reason.AsSpan().Trim().Length > 2000)
+            yield return new ValidationResult("Use a reopening reason of at most 2000 characters.", [nameof(Reason)]);
+    }
+}
