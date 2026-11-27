@@ -446,6 +446,74 @@ public class OpportunityService : CrudService<Opportunity>, IOpportunityService
         }, cancellationToken);
     }
 
+    public async Task<Opportunity?> ReopenAsync(int id, string reason, CancellationToken cancellationToken = default)
+    {
+        if (!_access.IsManager) throw new WorkflowException(403, "Only Manager/Admin may reopen an opportunity.");
+        reason = reason?.Trim() ?? string.Empty;
+        if (reason.Length is 0 or > 2000)
+            throw WorkflowException.Invalid("Reason", "Provide a reopening reason of at most 2000 characters.");
+        var preliminary = await _context.Opportunities.AsNoTracking().SingleOrDefaultAsync(o => o.Id == id, cancellationToken);
+        if (preliminary is null || !_access.Owns(preliminary.AgentId)) return null;
+        return await _workflow.Atomic(async () =>
+        {
+            await _workflow.LockProperty(preliminary.PropertyId, cancellationToken);
+            await _workflow.LockOpportunity(id, cancellationToken);
+            var previous = await _context.Opportunities.AsNoTracking().Include(o => o.Stage).SingleOrDefaultAsync(o => o.Id == id, cancellationToken);
+            if (previous is null || !_access.Owns(previous.AgentId)) return null;
+            if (previous.PropertyId != preliminary.PropertyId) throw AssociationConflict();
+            var property = await _context.Properties.AsNoTracking().SingleOrDefaultAsync(p => p.Id == previous.PropertyId, cancellationToken)
+                ?? throw AssociationConflict();
+            if (previous.Status is not ("Won" or "Lost"))
+                throw new WorkflowException(409, "Only an eligible closed opportunity can be reopened. Reload before trying again.");
+            var eligibleProperty = previous.Status == "Lost" ? property.Status == "Available" : property.Status == "Sold";
+            if (!eligibleProperty)
+                throw new WorkflowException(409, "The property's current state does not allow reopening this opportunity.");
+            if (previous.Status == "Won")
+            {
+                var winners = await _context.Opportunities.Where(o => o.PropertyId == property.Id && o.Status == "Won").Select(o => o.Id).ToListAsync(cancellationToken);
+                if (winners.Count != 1 || winners[0] != id)
+                    throw new WorkflowException(409, "The property's winning outcome is inconsistent. Reopening is unavailable.");
+            }
+            if (await _context.Opportunities.AnyAsync(o => o.Id != id && o.BuyerContactId == previous.BuyerContactId && o.PropertyId == previous.PropertyId && o.Status == "Open", cancellationToken))
+                throw new WorkflowException(409, "An Open opportunity already exists for this buyer and property.");
+            var inquiry = await _context.PipelineStages.AsNoTracking().SingleOrDefaultAsync(s => s.Code == "INQUIRY", cancellationToken)
+                ?? throw new WorkflowException(503, "The Inquiry stage is unavailable.");
+            await _workflow.LockContacts([previous.BuyerContactId, property.SellerContactId], cancellationToken);
+            var now = DateTime.UtcNow;
+            var propertyStatus = previous.Status == "Won" ? "Available" : property.Status;
+            if (propertyStatus != property.Status)
+                await _context.Properties.Where(p => p.Id == property.Id).ExecuteUpdateAsync(set => set
+                    .SetProperty(p => p.Status, propertyStatus).SetProperty(p => p.UpdatedAt, now), cancellationToken);
+            _workflow.Detach<Opportunity>(id);
+            var target = await _context.Opportunities.SingleAsync(o => o.Id == id, cancellationToken);
+            target.StageId = inquiry.Id;
+            target.Status = "Open";
+            target.FinalPrice = null;
+            target.LostReason = null;
+            target.ClosedAt = null;
+            _context.Activities.Add(new Activity
+            {
+                Type = "Stage Change", Subject = "Opportunity reopened", ContactId = previous.BuyerContactId,
+                OpportunityId = id, PropertyId = previous.PropertyId, FromStageId = previous.StageId, ToStageId = inquiry.Id,
+                UserId = previous.AgentId, CreatedById = _access.ActorId, CompletedAt = now, IsSystemGenerated = true,
+                Details = JsonSerializer.Serialize(new
+                {
+                    reason, previousStageCode = previous.Stage.Code, stageCode = inquiry.Code,
+                    previousStatus = previous.Status, status = "Open", previousFinalPrice = previous.FinalPrice, finalPrice = (decimal?)null,
+                    previousLostReason = previous.LostReason, lostReason = (string?)null, previousClosedAt = previous.ClosedAt, closedAt = (DateTime?)null,
+                    previousPropertyStatus = property.Status, propertyStatus, previousOfferAmount = previous.OfferAmount, offerAmount = previous.OfferAmount,
+                    previousCommissionRate = previous.CommissionRate, commissionRate = previous.CommissionRate,
+                    previousCommissionAmount = previous.Status == "Won" && previous.FinalPrice.HasValue
+                        ? (decimal?)decimal.Round(previous.FinalPrice.Value * previous.CommissionRate, 2, MidpointRounding.AwayFromZero) : null,
+                    commissionAmount = (decimal?)null
+                })
+            });
+            await _context.SaveChangesAsync(cancellationToken);
+            await _workflow.RefreshContacts([previous.BuyerContactId, property.SellerContactId], cancellationToken);
+            return await GetByIdAsync(id, cancellationToken: cancellationToken);
+        }, cancellationToken);
+    }
+
     public override async Task<IEnumerable<Opportunity>> GetAllAsync(
         IEnumerable<Expression<Func<Opportunity, object>>>? includes = null,
         CancellationToken cancellationToken = default)

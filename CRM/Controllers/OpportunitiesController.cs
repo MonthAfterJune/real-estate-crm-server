@@ -129,6 +129,14 @@ public class OpportunitiesController : ControllerBase
         return result is null ? NotFound() : Ok(_mapper.Map<OpportunityResponse>(result));
     }
 
+    [Authorize(Roles = "manager,admin")]
+    [HttpPost("{id}/reopen")]
+    public async Task<ActionResult<OpportunityResponse>> Reopen(int id, OpportunityReopenRequest request, CancellationToken token)
+    {
+        var result = await _service.ReopenAsync(id, request.Reason, token);
+        return result is null ? NotFound() : Ok(_mapper.Map<OpportunityResponse>(result));
+    }
+
     private async Task ValidateOffer(int stageId, decimal? offer, CancellationToken token)
     {
         var stage = await _stages.GetByIdAsync(stageId, cancellationToken: token);

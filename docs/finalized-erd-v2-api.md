@@ -8,6 +8,8 @@ The [Part 02 workflow implementation](../../docs/development/part02-implementati
 
 The [Part 03 workflow implementation](../../docs/development/part03-implementation.md) adds explicit Won/Lost closure commands, automatic competing losses, Open-only commission-rate editing and computed Won commission. It preserves the existing schema and protected generic PUT fields.
 
+The [Part 04 workflow implementation](../../docs/development/part04-implementation.md) adds Manager/Admin reopening and staff withdrawal controls, preserving the existing release/republication paths and schema.
+
 ## Existing API shape changes
 
 Routes continue to use cookie authentication, CSRF for writes, camelCase JSON and full PUT payloads. Old request shapes need updating; obsolete fields in the strict DTOs return validation errors.
@@ -53,9 +55,20 @@ Outcome(s), property state, all affected buyer/seller status recomputation and i
 
 Won commission uses decimal `FinalPrice × CommissionRate`, rounded once to two decimals with the [user-approved half-up rule](../../docs/business/amendments/2026-11-26-commission-rounding.md); exact 0.005 becomes 0.01. No client float calculation or retrospective default rewrite is used.
 
+## Part 04 reopening and withdrawal
+
+`POST /api/Opportunities/{id}/reopen` accepts only `{ "reason": string }` through the staff cookie/CSRF pipeline. Manager/Admin are required in both controller and service. The trimmed reason must be nonblank and at most 2000 characters; unmapped fields are rejected. Success returns 200 with the normal bounded target OpportunityResponse. Invalid reason returns 400, Agent access 403, missing target 404, and state/pair/winning-identity/concurrency failures 409.
+
+- A Lost target requires its property to be Available. A Won target requires Sold and must be the sole nondeleted Won deal on that property; contradictory winners are rejected without repair. Neither may reopen when another nondeleted Open opportunity has the same buyer/property pair.
+- The existing opportunity becomes Open at fixed-code Inquiry. FinalPrice, LostReason and ClosedAt clear. ID, buyer/property/Agent references, OfferAmount and the saved CommissionRate remain unchanged. Won reopening also makes its property Available. Other closed competitors remain closed. Computed earned commission becomes null while Open.
+- Property/Opportunity/Contact locking, fresh validation, mutation, both buyer/seller status recomputation and history share one transaction. A failure rolls back the whole operation. The existing unique Open-pair index remains the final duplicate defense. A later independent withdrawal may validly follow reopening; ordinary progress on the Withdrawn listing remains blocked until republication.
+- Every successful reopen creates exactly one immutable generated Stage Change Activity, with both stage IDs even for Inquiry → Inquiry. It records the supplied reason, old/new outcome, closure/financial/property facts, retained offer/rate, authenticated initiator and responsible Agent. No competitor identity is exposed. Repeat reopening returns conflict without another event.
+
+Withdrawal continues through full `PUT /api/Properties/{id}`. The staff edit form now offers **Withdraw listing** for an existing Draft/Available listing. Reserved must first be released through its valid exclusive opportunity; Sold remains independently locked. A Withdrawn listing can **Publish listing** after positive-price validation. Creation remains Draft-only; no new withdrawal endpoint or reason requirement is introduced.
+
 ## Remaining workflow work
 
-Part 04 reopening is still unimplemented. It must adopt the same serialization, Contact recomputation and atomic-history protocol. Parts 01–03 do not establish complete reporting, account lifecycle, attachment or portal behavior.
+Parts 01–04 do not establish complete reporting, account lifecycle, attachment or portal behavior. The delivery records state the tested workflow scope and actual verification limits; they do not claim the entire CRM is production-complete.
 
 Part 01 adds owner-scoped Contact/opportunity access, listing write scope, assignment guards and target visibility for the existing qualification/Note paths. These changes do not establish complete production provisioning, every account lifecycle, document storage or all attachment workflows. The Document table still does not implement file safety or external storage by itself.
 
@@ -65,6 +78,8 @@ The Part 01 staff pages and typed services now use Buyer/Seller/Both, computed C
 
 The Pipeline also supports **Edit offer → Save offer**, valid forward/back-one stage choices, visible Property status, readable generated history and optional **Move to Viewing / Keep current stage** after Viewing completion. Controls identify the buyer so competing opportunities for one listing remain distinguishable. A saved mutation followed by a failed secondary refresh is reported as saved and offers a read-only Refresh action.
 
-Selected Open opportunities offer **Mark as Won → Final price (₱) → Confirm Won** when Closing/Reserved, and **Mark as Lost → Lost reason → Confirm Lost** at every stage. Manager/Admin can **Edit commission rate → Commission rate (decimal) → Save commission rate**. Closed views show saved outcome, timestamp, price/reason, property state and server Won commission, with scalar/outcome edit controls removed. Existing ordinary Activity/Note behavior is retained; no reopening control is added.
+Selected Open opportunities offer **Mark as Won → Final price (₱) → Confirm Won** when Closing/Reserved, and **Mark as Lost → Lost reason → Confirm Lost** at every stage. Manager/Admin can **Edit commission rate → Commission rate (decimal) → Save commission rate**. Closed views show saved outcome, timestamp, price/reason, property state and server Won commission, with scalar/outcome edit controls removed. Existing ordinary Activity/Note behavior is retained.
 
-The directly affected Dashboard/history consumers use v2 timestamps/statuses and nullable values. The recent PHP Price display and seller-only picker behavior are retained. Buyer/seller portal prototypes, broader reporting and later outcome automation remain separate work. Builds and mocked browser fixtures are not proof of real persistence; consult the Part 01 and Part 02 delivery evidence for actual isolated API/PostgreSQL checks.
+For closed Won/Lost, Manager/Admin can **Reopen opportunity → Reopening reason → Confirm reopen**, with **Cancel reopening**. Agent does not receive this control. Validation/conflict preserves entered reason; success uses the authoritative response and existing saved-but-refresh-failed handling. **Listings → Edit → Withdraw listing** exposes eligible withdrawal; Withdrawn **Edit → Publish listing** remains the republication path. Reserved rows explain: **Release the reservation before withdrawing.**
+
+The directly affected Dashboard/history consumers use v2 timestamps/statuses and nullable values. The recent PHP Price display and seller-only picker behavior are retained. Buyer/seller portal prototypes and broader reporting remain separate work. Builds and mocked browser fixtures are not proof of real persistence; consult each Part 01–04 delivery record for the actual isolated API/PostgreSQL checks and limits.
