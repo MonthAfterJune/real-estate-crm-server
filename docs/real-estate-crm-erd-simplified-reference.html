@@ -1,0 +1,120 @@
+<style>
+#erd svg.erDiagram .divider path { stroke-opacity: 0.5; }
+#erd svg.erDiagram .row-rect-odd path,
+#erd svg.erDiagram .row-rect-odd rect,
+#erd svg.erDiagram .row-rect-even path,
+#erd svg.erDiagram .row-rect-even rect { stroke: none !important; }
+</style>
+<div id="erd"></div>
+<script type="module">
+import mermaid from 'https://esm.sh/mermaid@11/dist/mermaid.esm.min.mjs';
+const themeMode = document.documentElement.dataset.mode;
+const dark = themeMode ? themeMode === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches;
+await document.fonts.ready;
+mermaid.initialize({
+  startOnLoad: false,
+  theme: 'base',
+  fontFamily: '"anthropic-sans", sans-serif',
+  themeVariables: {
+    darkMode: dark,
+    fontSize: '13px',
+    fontFamily: '"anthropic-sans", sans-serif',
+    lineColor: dark ? '#9c9a92' : '#73726c',
+    textColor: dark ? '#c2c0b6' : '#3d3d3a',
+  },
+});
+const { svg } = await mermaid.render('erd-svg', `erDiagram
+  ROLE ||--o{ USER : has
+  USER ||--o{ CONTACT : owns
+  USER ||--o{ OPPORTUNITY : represents
+  USER ||--o{ PROPERTY : lists
+  USER ||--o{ NOTE : writes
+  CONTACT ||--o{ PROPERTY : sells
+  CONTACT ||--o{ OPPORTUNITY : buys
+  CONTACT ||--o{ ACTIVITY : has
+  PROPERTY ||--o{ OPPORTUNITY : has
+  OPPORTUNITY }o--|| PIPELINE_STAGE : in_stage
+  OPPORTUNITY ||--o{ ACTIVITY : has
+  USER {
+    int Id PK
+    string FullName
+    string Email
+    int RoleId FK
+  }
+  ROLE {
+    int Id PK
+    string Name
+  }
+  CONTACT {
+    int Id PK
+    string FirstName
+    string LastName
+    string Email
+    string Type
+    string Status
+    string Source
+    int OwnerId FK
+  }
+  PROPERTY {
+    int Id PK
+    string Address
+    decimal Price
+    string Status
+    int Bedrooms
+    int SellerContactId FK
+    int ListingAgentId FK
+  }
+  OPPORTUNITY {
+    int Id PK
+    int BuyerContactId FK
+    int PropertyId FK
+    int AgentId FK
+    int StageId FK
+    decimal OfferAmount
+  }
+  PIPELINE_STAGE {
+    int Id PK
+    string Name
+    int SortOrder
+  }
+  ACTIVITY {
+    int Id PK
+    string Type
+    int ContactId FK
+    int OpportunityId FK
+    datetime OccurredAt
+  }
+  NOTE {
+    int Id PK
+    int AuthorId FK
+    string EntityType
+    int EntityId
+    string Body
+  }
+`);
+document.getElementById('erd').innerHTML = svg;
+
+document.querySelectorAll('#erd svg.erDiagram .node').forEach(node => {
+  const firstPath = node.querySelector('path[d]');
+  if (!firstPath) return;
+  const d = firstPath.getAttribute('d');
+  const nums = d.match(/-?[\d.]+/g)?.map(Number);
+  if (!nums || nums.length < 8) return;
+  const xs = [nums[0], nums[2], nums[4], nums[6]];
+  const ys = [nums[1], nums[3], nums[5], nums[7]];
+  const x = Math.min(...xs), y = Math.min(...ys);
+  const w = Math.max(...xs) - x, h = Math.max(...ys) - y;
+  const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+  rect.setAttribute('x', x); rect.setAttribute('y', y);
+  rect.setAttribute('width', w); rect.setAttribute('height', h);
+  rect.setAttribute('rx', '8');
+  for (const a of ['fill', 'stroke', 'stroke-width', 'class', 'style']) {
+    if (firstPath.hasAttribute(a)) rect.setAttribute(a, firstPath.getAttribute(a));
+  }
+  firstPath.replaceWith(rect);
+});
+
+document.querySelectorAll('#erd svg.erDiagram .row-rect-odd path, #erd svg.erDiagram .row-rect-even path').forEach(p => {
+  p.setAttribute('stroke', 'none');
+});
+</script>
